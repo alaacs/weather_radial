@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+
+	<!-- D3.js -->
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.6/d3.min.js" charset="utf-8"></script>
+
+	<!-- Google Font -->
+	<link href='http://fonts.googleapis.com/css?family=Open+Sans:300,400' rel='stylesheet' type='text/css'>
+
+	<style>
+		body {
+		  	font-size: 10px;
+		  	font-family: 'Open Sans', sans-serif;
+		  	font-weight: 400;
+		  	fill: #8C8C8C;
+		  	text-align: center;
+		}
+
+		.title {
+			text-anchor: middle;
+			font-size: 16px;
+			fill: #5E5E5E;
+		}
+
+		.city {
+			text-anchor: middle;
+			font-size: 24px;
+			fill: #5E5E5E;
+		}
+
+		.year {
+			text-anchor: middle;
+			font-size: 12px;
+			font-weight: 300;
+			fill: #D3D3D3;
+		}
+
+		.january {
+			font-size: 10px;
+			text-anchor: start;
+			font-weight: 300;
+			fill: #D3D3D3;
+		}
+		.tempBarText
+		{
+			font-size: 10px;
+			text-anchor: start;
+			font-weight: bold;
+			fill: #5E5E5E;
+		}
+		.yearLine {
+			stroke: #C4C4C4;
+		}
+
+		.axisText {
+			fill: #D3D3D3;
+			font-size: 10px;
+			font-weight: 300;
+			text-anchor: middle;
+			text-shadow: 0 1px 0 #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 -1px 0 #fff;
+		}
+
+		.axisCircles {
+			fill: none;
+			stroke: #F0F0F0;
+			stroke-width: 1px;
+		}
+
+		.legendText {
+		  	font-size: 10px;
+		  	font-weight: 400;
+		  	fill: #8C8C8C;
+		  	text-align: center;
+		}
+		.highlight{
+			stroke-width: 3;
+			stroke: #FEE80C;
+		}
+	</style>
+
+</head>
+<body>
+
+	<div id="chart"></div>
+
+<script>
+
+function getJanuary2018Data(callback){
+	//January 1st 2018 Unix time
+	var Jan1_2018Epoche = 1514764800;
+	//1 day equivalent seconds
+	var DaySeconds =  86400;
+	//promises array
+	var promises = [];
+
+	//Uncomment the loop content
+	for (var i = 0; i < 31; i++) {
+		//This tme I wanna do this without jquery nor any libraries .. do promises with native XMLHttpRequest object
+		var url = `https://api.darksky.net/forecast/e69d4b69b3569bcbce87cded65387ea7/39.9863563,-0.0513246,${Jan1_2018Epoche + i * DaySeconds}?units=si&exclude=currently,minutely,hourly,alerts,flags&lang=en`;
+		//add each promise into the promises array
+		promises.push(makeGetRequest(url));
+	}
+
+	//Comment this line .. was for testing not to consume the API daily quota
+	//promises.push(makeGetRequest("http://localhost/mgeotech/Graphics/weather_radial/data.json"));
+
+	//Promise.all gets the results from all the promises in one result object
+	Promise.all(promises).then(function(res){
+		//Comment
+		// res = res[0];
+		//iterate over the results and extract the properties from the api resut JSON
+		res.forEach(function(d) {
+			if(d.daily && d.daily.data[0])
+			{
+			 	d.min_temp = d.daily.data[0].temperatureMin;
+				//Mean Temprature will be the average temerature for each day
+			 	d.mean_temp = (d.daily.data[0].temperatureMin + d.daily.data[0].temperatureMax)/2;
+			 	d.max_temp = d.daily.data[0].temperatureMax;
+				//convert the UNIX time(Epoch) into a date object
+				d.date = fromEpochToDate(d.daily.data[0].time);
+			}
+	 	});
+		//send back the ready array to the callback function
+		if(callback)
+			callback(res);
+	})
+}
+	function makeGetRequest(url){
+		//Using the native XMLHttpRequest from Javascript and return a promise out of it
+		//Promisify XMLHttpRequest
+		return new Promise(function(resolve, reject){
+			var xhttp = new XMLHttpRequest();
+			xhttp.addEventListener("load", function(){
+				resolve(JSON.parse(this.responseText));
+			});
+			xhttp.addEventListener("error", function(evt){
+				resolve();
+			});
+
+			xhttp.open("GET", url, true);
+			xhttp.send();
+		});
+}
+//convert Unix time(Epoch) into a date object
+function fromEpochToDate(epoch){
+	var d = new Date(0); // The 0 there is the key, which sets the date to the epoch
+	d.setUTCSeconds(epoch);
+	return d;
+}
+getJanuary2018Data(function(temperatureData){
+	//This design is based on the amazing work of http://www.weather-radials.com/
+	//And is only meant as a nice example of how you can use an SVG gradient as a legend
+
+	//the miniumum of minimum tepratures
+	var min_min_temp = d3.min(temperatureData, function(d) { return d.min_temp; });
+	//the maxiumum of minimum tepratures
+	var max_max_temp = d3.max(temperatureData, function(d) { return d.max_temp; });
+
+	///////////////////////////////////////////////////
+	//////////////// Set the Scales ///////////////////
+	///////////////////////////////////////////////////
+
+	//Set the dimensions of the chart
+	var margin = {top: 30, right: 30, bottom: 30, left: 50},
+	    width = 600 - margin.left - margin.right,
+	    height = 600 - margin.top - margin.bottom;
+
+	var parseDate = d3.time.format("%Y-%m-%d").parse;
+
+	//Set the minimum inner radius and max outer radius of the chart
+	var innerRadius = 80,
+		outerRadius = 200;
+
+	//Base the color scale on average temperature extremes
+	var colorScale = d3.scale.linear()
+		.domain([min_min_temp, max_max_temp])
+		.range(["#2c7bb6", "#d7191c"])
+
+	//Scale for the heights of the bar, not starting at zero to give the bars an initial offset outward
+	var barScale = d3.scale.linear()
+		.range([innerRadius, outerRadius]);
+
+	//Scale to turn the date into an angle of 360 degrees in total
+	//With the first datapoint (Jan 1st) on top
+	//I changed them maxiumum range to 170 instead of 180, so the last bar of my bars will not overlap with the first one,
+	var angle = d3.scale.linear()
+		.range([-180, 170]);
+
+	///////////////////////////////////////////////////
+	////////////// Initialize the SVG /////////////////
+	///////////////////////////////////////////////////
+
+	//Add the svg canvas for the line chart
+	var svg = d3.select("#chart")
+	    .append("svg")
+	        .attr("width", width + margin.left + margin.right)
+	        .attr("height", height + margin.top + margin.bottom)
+	    .append("g")
+	        .attr("transform", "translate(" + (margin.left + width/2) + "," + margin.top + ")");
+
+	//Add a title to explain the gradient
+	svg.append("text")
+		.attr("class", "title")
+		.attr("x", 0)
+		.attr("y", 0)
+		.text("Jan 2018 Tempratures");
+	console.log(temperatureData);
+
+
+
+
+///////////////////////////////////////////////////
+///////// Create the Temperature circle ///////////
+///////////////////////////////////////////////////
+//d3.csv("http://pixel.uji.es/teaching/d3/weatherNY2015.csv", function(error, temperatureData) {
+
+	//Turn strings into actual numbers
+	//Set the bar and angle domains
+	barScale.domain([min_min_temp, max_max_temp]);
+	angle.domain(d3.extent(temperatureData, function(d) { return d.date; }));
+
+	//Wrapper for the bars and to position it downward
+	//Draw the circles dynmaically based on temprature ranges
+	var nineColorBarWrapper = svg.append("g")
+		.attr("transform", "translate(" + 0 + "," + (outerRadius + 50) + ")");
+
+	var temperatureRanges = [Math.round(min_min_temp)];
+	var numOfRanges = 3;
+	var rangeIncrement = (min_min_temp + max_max_temp)/numOfRanges;
+	for (var i = 1; i < numOfRanges; i++) {
+		var prev = temperatureRanges[i - 1];
+		temperatureRanges.push(Math.round(prev + rangeIncrement));
+	}
+	temperatureRanges.push(Math.round(max_max_temp));
+
+	//Draw gridlines below the bars
+ 	var axes = nineColorBarWrapper.selectAll(".gridCircles")
+	 	.data(temperatureRanges)
+	 	.enter().append("g");
+	//Draw the circles
+	axes.append("circle")
+	 	.attr("class", "axisCircles")
+	 	.attr("r", function(d) { return barScale(d); });
+	//Draw the axis labels
+	axes.append("text")
+		.attr("class", "axisText")
+		.attr("y", function(d) { return barScale(d); })
+		.attr("dy", "0.3em")
+		.text(function(d) { return d + "°C"});
+
+	//Add a small title to explain
+	nineColorBarWrapper.append("text")
+		.attr("class", "city")
+		.attr("x", 0)
+		.attr("y", 0)
+		.text("Castellon");
+	//Add subtitle for year
+	nineColorBarWrapper.append("text")
+		.attr("class", "year")
+		.attr("x", 0)
+		.attr("y", 22)
+		.text("2018");
+
+	//Add January for reference
+	nineColorBarWrapper.append("text")
+		.attr("class", "january")
+		.attr("x", 5)
+		.attr("y", -outerRadius * 0.91)
+		.text("Jan");
+	//Add a line to split the year
+	nineColorBarWrapper.append("line")
+		.attr("class", "yearLine")
+		.attr("x1", 0)
+		.attr("y1",	 -innerRadius * 0.9)
+		.attr("x2", 0)
+		.attr("y2", -outerRadius * 0.95);
+
+	//Draw a bar per day were the height is the difference between the minimum and maximum temperature
+	//And the color is based on the mean temperature
+ 	nineColorBarWrapper.selectAll(".tempBar")
+	 	.data(temperatureData)
+	 	.enter().append("rect")
+	 	.attr("class", "tempBar")
+	 	.attr("transform", function(d,i) {
+			return "rotate(" + (angle(d.date)) + ")";
+		})
+	 	.attr("width", 5)
+		.attr("height", function(d,i) {
+			return barScale(d.max_temp) - barScale(d.min_temp);
+		})
+	 	.attr("x", -0.5)
+	 	.attr("y", function(d,i) {
+			return barScale(d.min_temp);
+		}).on("mouseover", function() {
+					d3.select(this).classed("highlight", true);
+				})
+				.on("mouseout", function() {
+					d3.select(this).classed("highlight", false);
+				}).transition()
+						.delay(function(d, i) {
+							return i * 200;
+						})
+	 	.style("fill", function(d) {
+			return colorScale(d.mean_temp);
+		})
+
+
+		//Create text for the day of the month on each bar
+		nineColorBarWrapper.selectAll(".tempBarText")
+		.data(temperatureData)
+		.enter().append("text").transition()
+		.delay(function(d, i) {
+			return i * 200;
+		})
+		.attr("class", "tempBarText")
+		.attr("x", function(d, i){
+			d.x = -0.5;
+			return d.x;
+		})
+		.attr("y", function(d,i) {
+			d.y = barScale(d.min_temp);
+			return d.y;
+		})
+		.attr("transform", function(d,i) {
+			d.angle = angle(d.date);
+			//add the position of the text, translate it to be close to the circle line and then rotate it the negative angle around itself to make it look not rotated
+			return `rotate(${angle(d.date)})translate(0,${220-barScale(d.min_temp)})rotate(${-angle(d.date)},${d.x},${d.y})`;
+		})
+
+		.text(function(d){
+			return d.date.getDate();
+		})
+
+	///////////////////////////////////////////////////
+	///////////// Create the gradient ////////////////
+	///////////////////////////////////////////////////
+
+	//Create a linear gradient with multiple colors
+	svg.append("defs")
+		.append("linearGradient")
+		.attr("id", "legendGradientTwo")
+		.attr("x1", "0%").attr("y1", "0%")
+		.attr("x2", "100%").attr("y2", "0%")
+		.selectAll("stop")
+		.data([
+				{offset: "0%", color: "#2c7bb6"},
+				{offset: "100%", color: "#d7191c"}
+			])
+		.enter().append("stop")
+		.attr("offset", function(d) { return d.offset; })
+		.attr("stop-color", function(d) { return d.color; });
+
+	///////////////////////////////////////////////////
+	/////////////// Create the Legend /////////////////
+	///////////////////////////////////////////////////
+
+	var legendWidth = 300;
+
+	//Create a wrapper for the legend
+	var legendWrapper = svg.append("g")
+		.attr("class", "legendWrapper")
+		.attr("transform", "translate(0," + (2*outerRadius + 40) + ")");
+
+		var legend_offset_y = 75
+	//Data for the legend text
+	var legendText = [
+		{x: -legendWidth/2, y: 30 + legend_offset_y, text: `${min_min_temp}°C`, anchor: "start"},
+		{x: 0, y: 0 + legend_offset_y, text: "Average temperature on a day", anchor: "middle"},
+		{x: legendWidth/2, y: 30 + legend_offset_y, text: `${max_max_temp}°C`, anchor: "end"}];
+
+	//Draw the rectangle and fill with the gradient
+	legendWrapper.append("rect")
+		.attr("class", "legend")
+		.attr("x", -legendWidth/2)
+		.attr("y", 10 + legend_offset_y)
+		.attr("rx", 4)
+		.attr("width", legendWidth)
+		.attr("height", 8)
+		.style("fill", "url(#legendGradientTwo)");
+
+	//Append the text along the legend
+	legendWrapper.selectAll(".legendText")
+		.data(legendText)
+	   .enter().append("text")
+		.attr("class", "legendText")
+		.attr("x", function(d) { return d.x; })
+		.attr("y", function(d) { return d.y; })
+		.style("text-anchor", function(d) { return d.anchor; })
+		.text(function(d) { return d.text; });
+
+});
+
+
+</script>
+
+</body>
+</html>
